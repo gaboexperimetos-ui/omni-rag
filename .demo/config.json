@@ -1,0 +1,118 @@
+{
+  "sources": [
+    {
+      "name": "demo",
+      "path": "examples/vault-demo",
+      "type": "obsidian",
+      "exclude": [],
+      "include_extensions": [
+        ".md",
+        ".markdown",
+        ".mdx",
+        ".txt"
+      ]
+    },
+    {
+      "name": "matematicas",
+      "path": "examples/vault-demo/Matematicas",
+      "type": "obsidian",
+      "exclude": [],
+      "include_extensions": [
+        ".md",
+        ".markdown",
+        ".mdx",
+        ".txt"
+      ]
+    },
+    {
+      "name": "fisica",
+      "path": "examples/vault-demo/Fisica",
+      "type": "obsidian",
+      "exclude": [],
+      "include_extensions": [
+        ".md",
+        ".markdown",
+        ".mdx",
+        ".txt"
+      ]
+    },
+    {
+      "name": "quimica",
+      "path": "examples/vault-demo/Quimica",
+      "type": "obsidian",
+      "exclude": [],
+      "include_extensions": [
+        ".md",
+        ".markdown",
+        ".mdx",
+        ".txt"
+      ]
+    },
+    {
+      "name": "historia",
+      "path": "examples/vault-demo/Historia",
+      "type": "obsidian",
+      "exclude": [],
+      "include_extensions": [
+        ".md",
+        ".markdown",
+        ".mdx",
+        ".txt"
+      ]
+    },
+    {
+      "name": "proyectos",
+      "path": "examples/vault-demo/Proyectos",
+      "type": "obsidian",
+      "exclude": [],
+      "include_extensions": [
+        ".md",
+        ".markdown",
+        ".mdx",
+        ".txt"
+      ]
+    },
+    {
+      "name": "vida",
+      "path": "examples/vault-demo/Vida",
+      "type": "obsidian",
+      "exclude": [],
+      "include_extensions": [
+        ".md",
+        ".markdown",
+        ".mdx",
+        ".txt"
+      ]
+    },
+    {
+      "name": "colegio",
+      "path": "examples/vault-demo/Colegio",
+      "type": "obsidian",
+      "exclude": [],
+      "include_extensions": [
+        ".md",
+        ".markdown",
+        ".mdx",
+        ".txt"
+      ]
+    }
+  ],
+  "groups": {
+    "todas-materias": [
+      "matematicas",
+      "fisica",
+      "quimica",
+      "historia"
+    ],
+    "vida-completa": [
+      "proyectos",
+      "vida"
+    ]
+  },
+  "index_path": "~/.local/share/omni-rag/index.json",
+  "backend": "bm25",
+  "bm25": {
+    "k1": 1.5,
+    "b": 0.75
+  }
+}

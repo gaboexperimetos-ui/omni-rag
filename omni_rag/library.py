@@ -75,8 +75,9 @@ def _note_from_item(key: str, item: dict[str, Any]) -> NoteInfo:
 class Catalog:
     """Vista de biblioteca sobre el índice ya construido."""
 
-    def __init__(self, notes: dict[str, NoteInfo]):
+    def __init__(self, notes: dict[str, NoteInfo], groups: dict[str, list[str]] | None = None):
         self.notes = notes
+        self.groups = dict(groups or {})
         self.names: dict[str, list[str]] = defaultdict(list)
         self.links: list[Link] = []
         self.incoming: dict[str, list[tuple[str, int]]] = defaultdict(list)
@@ -177,37 +178,53 @@ class Catalog:
         return counter.most_common()
 
     def collections(self) -> list[dict[str, Any]]:
-        """Resumen por colección (una materia, un vault, un proyecto…)."""
+        """Resumen por colección: fuentes y grupos.
+
+        Un grupo (``colegio``) agrega varias fuentes sin reindexar nada.
+        """
         groups: dict[str, list[NoteInfo]] = defaultdict(list)
         for note in self.notes.values():
             groups[note.source].append(note)
 
         result: list[dict[str, Any]] = []
         for name, notes in sorted(groups.items()):
-            keys = {note.key for note in notes}
-            tags = {tag for note in notes for tag in note.tags}
-            links = [link for link in self.links if link.origin in keys]
-            result.append(
-                {
-                    "name": name,
-                    "notes": len(notes),
-                    "words": sum(note.words for note in notes),
-                    "chars": sum(note.chars for note in notes),
-                    "tags": len(tags),
-                    "links": len(links),
-                    "broken": sum(1 for link in links if link.status == "broken"),
-                    "orphans": sum(
-                        1
-                        for note in notes
-                        if not any(
-                            link.status in {"ok", "ambiguous"}
-                            for link in self.outgoing(note.key)
-                        )
-                        and not self.backlinks(note.key)
-                    ),
-                }
-            )
+            result.append(self._collection_row(name, notes, kind="fuente"))
+
+        for name, members in sorted(self.groups.items()):
+            notes = [
+                note
+                for member in members
+                for note in groups.get(member, [])
+            ]
+            if notes:
+                result.append(self._collection_row(name, notes, kind="grupo"))
         return result
+
+    def _collection_row(
+        self, name: str, notes: list[NoteInfo], *, kind: str
+    ) -> dict[str, Any]:
+        keys = {note.key for note in notes}
+        tags = {tag for note in notes for tag in note.tags}
+        links = [link for link in self.links if link.origin in keys]
+        return {
+            "name": name,
+            "kind": kind,
+            "notes": len(notes),
+            "words": sum(note.words for note in notes),
+            "chars": sum(note.chars for note in notes),
+            "tags": len(tags),
+            "links": len(links),
+            "broken": sum(1 for link in links if link.status == "broken"),
+            "orphans": sum(
+                1
+                for note in notes
+                if not any(
+                    link.status in {"ok", "ambiguous"}
+                    for link in self.outgoing(note.key)
+                )
+                and not self.backlinks(note.key)
+            ),
+        }
 
     def duplicates(self) -> list[tuple[str, list[NoteInfo]]]:
         groups: dict[str, list[NoteInfo]] = defaultdict(list)
@@ -256,17 +273,23 @@ class Catalog:
         }
 
 
-def build(index: dict[str, Any] | None = None, config: Config | None = None) -> Catalog:
+def build(
+    index: dict[str, Any] | None = None,
+    config: Config | None = None,
+    groups: dict[str, list[str]] | None = None,
+) -> Catalog:
     """Construye el catálogo desde un índice o desde la config."""
     if index is None:
         if config is None:
             raise ValueError("hace falta un índice o una configuración")
         index = load_index(expand(config.index_path))
+    if groups is None and config is not None:
+        groups = config.groups
     notes = {
         key: _note_from_item(key, item)
         for key, item in index.get("files", {}).items()
     }
-    return Catalog(notes)
+    return Catalog(notes, groups=groups)
 
 
 def load(config: Config) -> Catalog:

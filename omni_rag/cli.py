@@ -99,6 +99,22 @@ def _collection(args: argparse.Namespace) -> str | None:
     return getattr(args, "collection", None) or getattr(args, "source", None)
 
 
+def _resolve_collections(config: Config, args: argparse.Namespace) -> set[str] | None:
+    """Expande --collection (fuente o grupo) al conjunto de fuentes."""
+    name = _collection(args)
+    if not name:
+        return None
+    expanded = config.sources_for(name)
+    if expanded is None:
+        available = ", ".join(config.collection_names()) or "ninguna"
+        print(
+            f"omni-rag: no existe la colección {name!r} (disponibles: {available})",
+            file=sys.stderr,
+        )
+        raise SystemExit(1)
+    return set(expanded)
+
+
 def cmd_search(args: argparse.Namespace) -> int:
     config = _load_or_fail(args.config)
     _index_or_fail(config)
@@ -106,7 +122,7 @@ def cmd_search(args: argparse.Namespace) -> int:
         config,
         args.text,
         k=args.top,
-        source=_collection(args),
+        sources=_resolve_collections(config, args),
         tag=args.tag,
         path=args.path,
     )
@@ -126,7 +142,7 @@ def cmd_context(args: argparse.Namespace) -> int:
         config,
         args.text,
         k=args.top,
-        source=_collection(args),
+        sources=_resolve_collections(config, args),
         tag=args.tag,
         path=args.path,
     )
@@ -230,6 +246,56 @@ def _find_or_fail(catalog: lib.Catalog, text: str) -> lib.NoteInfo:
     return matches[0]
 
 
+def cmd_groups(args: argparse.Namespace) -> int:
+    config, path = cfg.load(args.config)
+
+    if args.action == "list":
+        if not config.groups:
+            print(f"sin grupos en {path}", file=sys.stderr)
+            return 0
+        for name, members in sorted(config.groups.items()):
+            print(f"{name:16} → {', '.join(members)}")
+        return 0
+
+    if args.action == "add":
+        if not args.name or not args.members:
+            print("uso: omni-rag groups add NOMBRE FUENTE [FUENTE…]", file=sys.stderr)
+            return 2
+        if config.source(args.name):
+            print(f"omni-rag: {args.name!r} ya es una fuente; elige otro nombre", file=sys.stderr)
+            return 1
+        unknown = [member for member in args.members if not config.source(member)]
+        if unknown:
+            print(
+                f"omni-rag: fuentes desconocidas: {', '.join(unknown)}",
+                file=sys.stderr,
+            )
+            return 1
+        members: list[str] = []
+        for member in args.members:
+            if member not in members:
+                members.append(member)
+        config.groups[args.name] = members
+        cfg.save(config, args.config)
+        print(f"grupo {args.name} → {', '.join(members)}")
+        print("el grupo es una vista: no hace falta reindexar")
+        return 0
+
+    if args.action == "remove":
+        if not args.name:
+            print("uso: omni-rag groups remove NOMBRE", file=sys.stderr)
+            return 2
+        if args.name not in config.groups:
+            print(f"omni-rag: no existe el grupo {args.name!r}", file=sys.stderr)
+            return 1
+        del config.groups[args.name]
+        cfg.save(config, args.config)
+        print(f"grupo {args.name} quitado")
+        return 0
+
+    return 2
+
+
 def cmd_collections(args: argparse.Namespace) -> int:
     catalog = _catalog_or_fail(args.config)
     rows = catalog.collections()
@@ -242,14 +308,17 @@ def cmd_collections(args: argparse.Namespace) -> int:
         return 0
 
     width = max(len(row["name"]) for row in rows)
-    print(f"{'colección':<{width}}  {'notas':>6}  {'palabras':>9}  {'tags':>5}  {'rojos':>6}")
+    print(
+        f"{'colección':<{width}}  {'tipo':<6}  {'notas':>6}  "
+        f"{'palabras':>9}  {'tags':>5}  {'rojos':>6}"
+    )
     for row in rows:
         print(
-            f"{row['name']:<{width}}  {row['notes']:>6}  {row['words']:>9,}  "
-            f"{row['tags']:>5}  {row['broken']:>6}"
+            f"{row['name']:<{width}}  {row['kind']:<6}  {row['notes']:>6}  "
+            f"{row['words']:>9,}  {row['tags']:>5}  {row['broken']:>6}"
         )
     print()
-    print("una colección por materia, una global para todo: es el mismo índice.")
+    print("fuente = carpeta o vault; grupo = varias fuentes como una sola vista.")
     return 0
 
 
@@ -480,6 +549,18 @@ def build_parser() -> argparse.ArgumentParser:
     )
     collections.add_argument("--json", action="store_true", help="salida JSON")
     collections.set_defaults(func=cmd_collections)
+
+    groups = sub.add_parser("groups", help="grupos de colecciones (colegio = materias)")
+    groups_sub = groups.add_subparsers(dest="action", required=True)
+    groups_list = groups_sub.add_parser("list", help="lista los grupos")
+    groups_list.set_defaults(func=cmd_groups)
+    groups_add = groups_sub.add_parser("add", help="crea o reemplaza un grupo")
+    groups_add.add_argument("name")
+    groups_add.add_argument("members", nargs="+", metavar="FUENTE")
+    groups_add.set_defaults(func=cmd_groups)
+    groups_remove = groups_sub.add_parser("remove", help="quita un grupo")
+    groups_remove.add_argument("name")
+    groups_remove.set_defaults(func=cmd_groups)
 
     tags = sub.add_parser("tags", help="etiquetas de la biblioteca y su uso")
     tags.add_argument("--json", action="store_true", help="salida JSON")

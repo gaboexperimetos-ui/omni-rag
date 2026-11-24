@@ -1,0 +1,49 @@
+name: Bug
+description: Algo no funciona como debería
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Gracias por reportar. Cuanto más concreto, más rápido se arregla.
+  - type: textarea
+    id: que-paso
+    attributes:
+      label: Qué pasó
+      description: Comportamiento observado y comportamiento esperado.
+      placeholder: "Busqué 'derivadas' y..."
+    validations:
+      required: true
+  - type: textarea
+    id: reproducir
+    attributes:
+      label: Cómo reproducirlo
+      description: Comandos exactos, con la salida.
+      render: shell
+      placeholder: |
+        python3 -m omni_rag index
+        python3 -m omni_rag search "derivadas" -k 3
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Versión
+      description: Salida de `omni-rag --version` o el commit.
+      placeholder: "omni-rag 0.2.0"
+    validations:
+      required: true
+  - type: input
+    id: python
+    attributes:
+      label: Python y sistema
+      placeholder: "Python 3.14.10 / Linux"
+    validations:
+      required: true
+  - type: textarea
+    id: contexto
+    attributes:
+      label: Contexto extra
+      description: Estructura del vault, configuración, cualquier detalle relevante.
+    validations:
+      required: false

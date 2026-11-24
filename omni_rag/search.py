@@ -44,11 +44,15 @@ def query(
     text: str,
     *,
     k: int = 5,
-    source: str | None = None,
+    sources: set[str] | None = None,
     tag: str | None = None,
     path: str | None = None,
 ) -> list[Hit]:
-    """Busca ``text`` y aplica filtros de fuente, etiqueta o ruta."""
+    """Busca ``text`` y filtra por colecciones, etiqueta o ruta.
+
+    ``sources`` es el conjunto expandido de colecciones (una materia, un grupo,
+    el omni). None significa sin filtro.
+    """
     from .indexer import load_index
 
     index = load_index(expand(config.index_path))
@@ -58,7 +62,7 @@ def query(
         k1=config.k1,
         b=config.b,
     )
-    filters_active = bool(source or tag or path)
+    filters_active = bool(sources or tag or path)
     candidates = retriever.search(text, k=k * 10 if filters_active else k)
 
     kinds = _kinds(index)
@@ -67,7 +71,7 @@ def query(
     hits: list[Hit] = []
 
     for score, chunk in candidates:
-        if source and chunk.source != source:
+        if sources and chunk.source not in sources:
             continue
         if path and path.lower() not in chunk.path.lower():
             continue

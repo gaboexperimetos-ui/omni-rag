@@ -74,6 +74,7 @@ class Source:
 @dataclass
 class Config:
     sources: list[Source] = field(default_factory=list)
+    groups: dict[str, list[str]] = field(default_factory=dict)
     index_path: str = DEFAULT_INDEX
     backend: str = "bm25"
     k1: float = 1.5
@@ -82,6 +83,7 @@ class Config:
     def to_dict(self) -> dict[str, Any]:
         return {
             "sources": [s.to_dict() for s in self.sources],
+            "groups": {name: list(members) for name, members in self.groups.items()},
             "index_path": self.index_path,
             "backend": self.backend,
             "bm25": {"k1": self.k1, "b": self.b},
@@ -92,6 +94,10 @@ class Config:
         bm25 = data.get("bm25", {})
         return cls(
             sources=[Source.from_dict(item) for item in data.get("sources", [])],
+            groups={
+                str(name): [str(member) for member in members]
+                for name, members in (data.get("groups") or {}).items()
+            },
             index_path=str(data.get("index_path", DEFAULT_INDEX)),
             backend=str(data.get("backend", "bm25")),
             k1=float(bm25.get("k1", 1.5)),
@@ -103,6 +109,23 @@ class Config:
             if item.name == name:
                 return item
         return None
+
+    def sources_for(self, name: str) -> list[str] | None:
+        """Expande una colección: un grupo, o una fuente suelta.
+
+        Devuelve None si el nombre no existe. Los grupos no se anidan: un grupo
+        solo contiene nombres de fuentes.
+        """
+        if name in self.groups:
+            return list(self.groups[name])
+        if self.source(name):
+            return [name]
+        return None
+
+    def collection_names(self) -> list[str]:
+        names = [source.name for source in self.sources]
+        names.extend(self.groups)
+        return names
 
 
 def config_path(explicit: str | None = None) -> Path:

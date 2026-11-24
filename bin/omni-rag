@@ -1,0 +1,8 @@
+#!/usr/bin/env sh
+# Lanzador sin instalación: usa el paquete tal como está en el repo.
+set -e
+
+ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+PYTHON=${PYTHON:-python3}
+
+PYTHONPATH="$ROOT${PYTHONPATH:+:$PYTHONPATH}" exec "$PYTHON" -m omni_rag "$@"

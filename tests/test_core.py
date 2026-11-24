@@ -143,7 +143,7 @@ class IntegrationTest(unittest.TestCase):
         self.assertTrue(all("estudio" in hit.chunk.tags for hit in hits))
 
     def test_source_filter_excludes_everything_else(self) -> None:
-        hits = query(self.config, "GPU", k=3, source="otra")
+        hits = query(self.config, "GPU", k=3, sources={"otra"})
         self.assertEqual(hits, [])
 
     def test_context_respects_budget(self) -> None:
