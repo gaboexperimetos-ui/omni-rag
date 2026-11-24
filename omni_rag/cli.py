@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import argparse
+import json
 import sys
 from pathlib import Path
 
 from . import __version__
 from . import config as cfg
+from . import library as lib
 from .backends import available as available_backends
 from .config import Config, Source, expand
 from .indexer import build, load_index, stats as index_stats
@@ -87,9 +89,14 @@ def cmd_index(args: argparse.Namespace) -> int:
 
 def _common_filters(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("-k", "--top", type=int, default=5, help="resultados (5)")
-    parser.add_argument("--source", help="filtrar por nombre de fuente")
+    parser.add_argument("--source", help="filtrar por nombre de colección")
+    parser.add_argument("--collection", dest="collection", help="alias de --source")
     parser.add_argument("--tag", help="filtrar por etiqueta")
     parser.add_argument("--path", help="filtrar por fragmento de ruta")
+
+
+def _collection(args: argparse.Namespace) -> str | None:
+    return getattr(args, "collection", None) or getattr(args, "source", None)
 
 
 def cmd_search(args: argparse.Namespace) -> int:
@@ -99,7 +106,7 @@ def cmd_search(args: argparse.Namespace) -> int:
         config,
         args.text,
         k=args.top,
-        source=args.source,
+        source=_collection(args),
         tag=args.tag,
         path=args.path,
     )
@@ -119,7 +126,7 @@ def cmd_context(args: argparse.Namespace) -> int:
         config,
         args.text,
         k=args.top,
-        source=args.source,
+        source=_collection(args),
         tag=args.tag,
         path=args.path,
     )
@@ -203,6 +210,219 @@ def cmd_stats(args: argparse.Namespace) -> int:
     return 0
 
 
+# -- biblioteca ----------------------------------------------------------
+
+
+def _catalog_or_fail(config_arg: str | None) -> lib.Catalog:
+    config = _load_or_fail(config_arg)
+    _index_or_fail(config)
+    return lib.load(config)
+
+
+def _find_or_fail(catalog: lib.Catalog, text: str) -> lib.NoteInfo:
+    matches = catalog.find(text)
+    if not matches:
+        print(f"omni-rag: no encontré ninguna nota para {text!r}", file=sys.stderr)
+        raise SystemExit(1)
+    if len(matches) > 1:
+        names = ", ".join(note.title for note in matches[:4])
+        print(f"omni-rag: varias coincidencias ({names}…); uso la primera", file=sys.stderr)
+    return matches[0]
+
+
+def cmd_collections(args: argparse.Namespace) -> int:
+    catalog = _catalog_or_fail(args.config)
+    rows = catalog.collections()
+
+    if args.json:
+        print(json.dumps(rows, ensure_ascii=False, indent=2))
+        return 0
+    if not rows:
+        print("sin colecciones", file=sys.stderr)
+        return 0
+
+    width = max(len(row["name"]) for row in rows)
+    print(f"{'colección':<{width}}  {'notas':>6}  {'palabras':>9}  {'tags':>5}  {'rojos':>6}")
+    for row in rows:
+        print(
+            f"{row['name']:<{width}}  {row['notes']:>6}  {row['words']:>9,}  "
+            f"{row['tags']:>5}  {row['broken']:>6}"
+        )
+    print()
+    print("una colección por materia, una global para todo: es el mismo índice.")
+    return 0
+
+
+def cmd_overview(args: argparse.Namespace) -> int:
+    catalog = _catalog_or_fail(args.config)
+    summary = catalog.summary()
+
+    if args.json:
+        print(json.dumps(summary, ensure_ascii=False, indent=2))
+        return 0
+
+    top = " · ".join(f"{tag} {count}" for tag, count in summary["top_tags"]) or "—"
+    print("biblioteca omni-rag")
+    print(f"  fuentes      {summary['sources']}")
+    print(f"  notas        {summary['notes']}  ({summary['words']:,} palabras, {summary['chars']:,} chars)")
+    print(f"  etiquetas    {summary['tags']}")
+    print(f"  enlaces      {summary['links']}  ({summary['broken']} rojos, {summary['ambiguous']} ambiguos)")
+    print(f"  huérfanas    {summary['orphans']}")
+    print(f"  duplicadas   {summary['duplicates']}")
+    print(f"  top etiquetas  {top}")
+    return 0
+
+
+def cmd_tags(args: argparse.Namespace) -> int:
+    catalog = _catalog_or_fail(args.config)
+    tags = catalog.tags()
+    if args.json:
+        print(json.dumps(
+            [{"tag": tag, "notes": count} for tag, count in tags],
+            ensure_ascii=False,
+            indent=2,
+        ))
+        return 0
+    if not tags:
+        print("sin etiquetas", file=sys.stderr)
+        return 0
+    width = max(len(tag) for tag, _ in tags)
+    for tag, count in tags[: args.limit or None]:
+        print(f"{tag:<{width}}  {count}")
+    return 0
+
+
+def cmd_links(args: argparse.Namespace) -> int:
+    catalog = _catalog_or_fail(args.config)
+    note = _find_or_fail(catalog, args.note)
+    outgoing = catalog.outgoing(note.key)
+    incoming = catalog.backlinks(note.key)
+
+    if args.json:
+        payload = {
+            "note": note.title,
+            "location": note.location,
+            "outgoing": [
+                {
+                    "target": link.target,
+                    "line": link.line,
+                    "status": link.status,
+                    "resolved": link.resolved,
+                }
+                for link in outgoing
+            ],
+            "incoming": [
+                {
+                    "note": catalog.notes[origin].title,
+                    "location": catalog.notes[origin].location,
+                    "line": line,
+                }
+                for origin, line in incoming
+            ],
+        }
+        print(json.dumps(payload, ensure_ascii=False, indent=2))
+        return 0
+
+    print(f"{note.reference} — {note.location}")
+    if note.tags:
+        print(f"etiquetas: {', '.join(note.tags)}")
+
+    if outgoing:
+        print(f"\nsalientes ({len(outgoing)}):")
+        for link in outgoing:
+            suffix = f"  ← línea {link.line}"
+            if link.status == "broken":
+                suffix += "  [ROTO]"
+            elif link.status == "ambiguous":
+                suffix += f"  [AMBIGUO: {len(link.resolved)}]"
+            elif link.status == "self":
+                suffix += "  [a sí misma]"
+            print(f"  → {link.target}{suffix}")
+    else:
+        print("\nsalientes (0)")
+
+    if incoming:
+        print(f"\nentrantes ({len(incoming)}):")
+        for origin, line in incoming:
+            source = catalog.notes.get(origin)
+            title = source.title if source else origin
+            print(f"  ← [[{title}]]  (línea {line})")
+    else:
+        print("\nentrantes (0)")
+    return 0
+
+
+def cmd_orphans(args: argparse.Namespace) -> int:
+    catalog = _catalog_or_fail(args.config)
+    orphans = catalog.orphans()
+    if args.json:
+        print(json.dumps(
+            [{"note": note.title, "location": note.location} for note in orphans],
+            ensure_ascii=False,
+            indent=2,
+        ))
+        return 0
+    if not orphans:
+        print("no hay notas huérfanas")
+        return 0
+    for note in orphans:
+        print(f"[[{note.title}]]  —  {note.location}")
+    print(f"\n{len(orphans)} huérfanas", file=sys.stderr)
+    return 0
+
+
+def cmd_broken(args: argparse.Namespace) -> int:
+    catalog = _catalog_or_fail(args.config)
+    broken = catalog.broken()
+    if args.json:
+        print(json.dumps(
+            [
+                {
+                    "from": link.origin_title,
+                    "location": f"{link.origin_path}:{link.line}",
+                    "target": link.target,
+                }
+                for link in broken
+            ],
+            ensure_ascii=False,
+            indent=2,
+        ))
+        return 0
+    if not broken:
+        print("no hay enlaces rojos")
+        return 0
+    for link in broken:
+        print(f"{link.origin_path}:{link.line}  →  {link.target}")
+    print(f"\n{len(broken)} enlaces rojos", file=sys.stderr)
+    return 0
+
+
+def cmd_duplicates(args: argparse.Namespace) -> int:
+    catalog = _catalog_or_fail(args.config)
+    groups = catalog.duplicates()
+    if args.json:
+        print(json.dumps(
+            [
+                {
+                    "title": notes[0].title,
+                    "locations": [note.location for note in notes],
+                }
+                for _, notes in groups
+            ],
+            ensure_ascii=False,
+            indent=2,
+        ))
+        return 0
+    if not groups:
+        print("no hay títulos duplicados")
+        return 0
+    for _, notes in groups:
+        print(f"[[{notes[0].title}]]")
+        for note in notes:
+            print(f"  · {note.location}")
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="omni-rag",
@@ -250,6 +470,38 @@ def build_parser() -> argparse.ArgumentParser:
 
     stats = sub.add_parser("stats", help="estado del índice")
     stats.set_defaults(func=cmd_stats)
+
+    overview = sub.add_parser("overview", help="resumen de la biblioteca")
+    overview.add_argument("--json", action="store_true", help="salida JSON")
+    overview.set_defaults(func=cmd_overview)
+
+    collections = sub.add_parser(
+        "collections", help="resumen por colección (materias, vaults, proyectos)"
+    )
+    collections.add_argument("--json", action="store_true", help="salida JSON")
+    collections.set_defaults(func=cmd_collections)
+
+    tags = sub.add_parser("tags", help="etiquetas de la biblioteca y su uso")
+    tags.add_argument("--json", action="store_true", help="salida JSON")
+    tags.add_argument("--limit", type=int, default=0, help="máximo de etiquetas")
+    tags.set_defaults(func=cmd_tags)
+
+    links = sub.add_parser("links", help="enlaces salientes y entrantes de una nota")
+    links.add_argument("note", help="título o ruta de la nota")
+    links.add_argument("--json", action="store_true", help="salida JSON")
+    links.set_defaults(func=cmd_links)
+
+    orphans = sub.add_parser("orphans", help="notas sin enlaces")
+    orphans.add_argument("--json", action="store_true", help="salida JSON")
+    orphans.set_defaults(func=cmd_orphans)
+
+    broken = sub.add_parser("broken", help="enlaces a notas que no existen")
+    broken.add_argument("--json", action="store_true", help="salida JSON")
+    broken.set_defaults(func=cmd_broken)
+
+    duplicates = sub.add_parser("duplicates", help="títulos repetidos")
+    duplicates.add_argument("--json", action="store_true", help="salida JSON")
+    duplicates.set_defaults(func=cmd_duplicates)
 
     return parser
 

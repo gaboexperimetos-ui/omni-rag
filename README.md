@@ -1,8 +1,10 @@
 # omni-rag
 
-RAG léxico (BM25) multi-fuente sobre notas Markdown/Obsidian, sin dependencias,
-sin GPU y sin red. La búsqueda recupera fragmentos citando nota y línea; la
-respuesta la escribe después un LLM (local o el agente que uses).
+Biblioteca unificada de notas Markdown/Obsidian, con motor de búsqueda léxica
+(BM25) sin dependencias, sin GPU y sin red. Indexa varias colecciones —una
+materia, un curso, un proyecto, un vault entero— en un solo catálogo, y expone
+sobre ellas búsqueda, enlaces, etiquetas y salud del grafo. La respuesta la
+escribe después un LLM, si la quieres; omni-rag recupera y cita.
 
 ## Qué es BM25
 
@@ -45,12 +47,19 @@ omni-rag init [--vault RUTA] [--name NOMBRE]   # crea ~/.config/omni-rag/config.
 omni-rag index [--force]                       # indexa; incremental por mtime
 omni-rag search "consulta" [-k 5] [--json]     # resultados con cita
 omni-rag context "consulta" [--tokens 4000]    # bloque listo para un LLM
-omni-rag sources list|add|remove               # varias fuentes
+omni-rag sources add|list|remove               # colecciones (vaults, carpetas)
+omni-rag collections                           # notas/palabras/tags por colección
+omni-rag overview                              # salud global de la biblioteca
+omni-rag tags [--limit N]                      # etiquetas y cuántas notas las usan
+omni-rag links "NOTA"                          # salientes, entrantes y estado
+omni-rag orphans                               # notas sin enlaces
+omni-rag broken                                # enlaces a notas inexistentes
+omni-rag duplicates                            # títulos repetidos
 omni-rag stats                                 # estado del índice
 ```
 
-Filtros disponibles en `search` y `context`: `--source cerebro`, `--tag ia`,
-`--path proyectos`.
+Filtros en `search` y `context`: `--collection cerebro`, `--tag ia`,
+`--path proyectos`. `--source` sigue valiendo como alias de `--collection`.
 
 ### Ejemplo de `context`
 
@@ -60,6 +69,38 @@ omni-rag context "cómo arranco el router local" --tokens 2000
 
 Devuelve bloques numerados con `[[nota]]`, ruta, línea y encabezado, listos
 para pegar en un prompt. La generación no la hace omni-rag.
+
+## Cómo crece: de una materia al omni
+
+La unidad es la **colección**. Cada colección es una carpeta o vault; el
+catálogo es uno solo y se filtra por colección. Eso permite la progresión sin
+duplicar índices ni código:
+
+```bash
+# 1) una materia
+omni-rag sources add matematicas ~/Colegio/Matematicas
+omni-rag index
+omni-rag search "derivadas" --collection matematicas
+omni-rag context "derivadas" --collection matematicas --tokens 2000
+
+# 2) todas las materias del colegio
+omni-rag sources add fisica     ~/Colegio/Fisica
+omni-rag sources add historia   ~/Colegio/Historia
+omni-rag index
+omni-rag collections            # una fila por materia
+omni-rag search "revolución" --collection historia
+
+# 3) el colegio completo y la vida: el omni
+omni-rag sources add colegio    ~/Colegio
+omni-rag sources add vida       ~/Vida
+omni-rag index
+omni-rag overview               # todo junto
+```
+
+Cada fila de `collections` es tu "RAG de la materia": mismo motor, mismo
+formato de citas, distinto filtro. El omni es la misma biblioteca sin filtro.
+Cuando una colección crezca demasiado, se puede mover a su propio índice y
+enchufarla como backend; el contrato de salida no cambia.
 
 ## Configuración
 
@@ -92,9 +133,10 @@ reconstruye solo lo que cambió (mismo `mtime_ns` y tamaño).
 ```
 omni_rag/
 ├── tokenize.py   normalización, stopwords, stemming ligero español
-├── chunker.py    frontmatter YAML, secciones por encabezado, solape
+├── chunker.py    frontmatter YAML, secciones, enlaces, metadatos
 ├── bm25.py       BM25 Okapi + campos ponderados (título/tags/encabezado)
-├── indexer.py    recorrido de fuentes, índice JSON incremental
+├── indexer.py    recorrido de colecciones, índice JSON incremental
+├── library.py    catálogo: notas, etiquetas, enlaces, huérfanas, duplicados
 ├── backends.py   registro de recuperadores enchufables
 ├── search.py     filtros, snippets, bloque de contexto
 └── cli.py        interfaz de línea de comandos
@@ -126,6 +168,8 @@ RAGs nuevos (vectorial, un servicio HTTP, un servidor MCP…).
 ## Estado
 
 - [x] BM25 multi-fuente con índice incremental
+- [x] Catálogo de biblioteca: etiquetas, enlaces, huérfanas, rojos, duplicados
+- [x] Colecciones filtrables (`--collection`) con resumen por colección
 - [x] Filtros por fuente, etiqueta y ruta
 - [x] Salida humana, JSON y bloque de contexto
 - [ ] Backend de embeddings (requiere modelo aparte; el router local no expone

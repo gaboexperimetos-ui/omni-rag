@@ -7,6 +7,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from omni_rag import library as lib
 from omni_rag.bm25 import BM25, weighted_tokens
 from omni_rag.chunker import chunk_note, parse_frontmatter
 from omni_rag.config import Config, Source
@@ -108,6 +109,10 @@ class IntegrationTest(unittest.TestCase):
         )
         (self.vault / ".obsidian").mkdir()
         (self.vault / ".obsidian" / "basura.md").write_text("no indexar", encoding="utf-8")
+        (self.vault / "_plantillas").mkdir()
+        (self.vault / "_plantillas" / "Nota.md").write_text(
+            '---\ntitle: "{{title}}"\n---\n# {{title}}\n', encoding="utf-8"
+        )
 
         self.config = Config(
             sources=[Source(name="vault", path=str(self.vault), type="obsidian")],
@@ -123,6 +128,7 @@ class IntegrationTest(unittest.TestCase):
         files = self.index["files"]
         self.assertEqual(len(files), 2)
         self.assertNotIn("vault:.obsidian/basura.md", files)
+        self.assertNotIn("vault:_plantillas/Nota.md", files)
 
     def test_query_finds_note(self) -> None:
         hits = query(self.config, "GPU", k=3)
@@ -149,6 +155,76 @@ class IntegrationTest(unittest.TestCase):
         hits = query(self.config, "GPU", k=1)
         payload = json.loads(hits_to_json(hits, "GPU"))
         self.assertEqual(payload[0]["note"], "IA local")
+
+
+class LibraryTest(unittest.TestCase):
+    def setUp(self) -> None:
+        self.temp = tempfile.TemporaryDirectory()
+        root = Path(self.temp.name)
+        self.vault = root / "vault"
+        self.vault.mkdir()
+        (self.vault / "a.md").write_text(
+            '---\ntitle: "Alfa"\ntags: [uno]\n---\n'
+            "# Alfa\n\nVer [[Beta]] y [[Fantasma]].\n",
+            encoding="utf-8",
+        )
+        (self.vault / "b.md").write_text(
+            '---\ntitle: "Beta"\ntags: [uno, dos]\n---\n'
+            "# Beta\n\nVolver a [[Alfa]].\n",
+            encoding="utf-8",
+        )
+        (self.vault / "c.md").write_text(
+            '---\ntitle: "Suelta"\n---\n# Suelta\n\nNota sin enlaces.\n',
+            encoding="utf-8",
+        )
+        (self.vault / "d.md").write_text(
+            '---\ntitle: "Alfa"\n---\n# Alfa\n\nOtra nota con el mismo título.\n',
+            encoding="utf-8",
+        )
+        self.config = Config(
+            sources=[Source(name="vault", path=str(self.vault))],
+            index_path=str(root / "index.json"),
+        )
+        build(self.config, force=True)
+        self.catalog = lib.load(self.config)
+
+    def tearDown(self) -> None:
+        self.temp.cleanup()
+
+    def test_summary_counts(self) -> None:
+        summary = self.catalog.summary()
+        self.assertEqual(summary["notes"], 4)
+        self.assertEqual(summary["broken"], 1)
+        self.assertEqual(summary["ambiguous"], 1)
+        self.assertEqual(summary["duplicates"], 1)
+        self.assertEqual(summary["tags"], 2)
+
+    def test_links_resolve_and_backlinks(self) -> None:
+        beta = self.catalog.find("Beta")[0]
+        origins = [origin for origin, _ in self.catalog.backlinks(beta.key)]
+        self.assertEqual(len(origins), 1)
+        self.assertEqual(self.catalog.notes[origins[0]].title, "Alfa")
+
+    def test_broken_link_is_reported(self) -> None:
+        broken = self.catalog.broken()
+        self.assertEqual(len(broken), 1)
+        self.assertEqual(broken[0].target, "Fantasma")
+
+    def test_orphans(self) -> None:
+        titles = [note.title for note in self.catalog.orphans()]
+        self.assertEqual(titles, ["Suelta"])
+
+    def test_duplicates_group(self) -> None:
+        groups = self.catalog.duplicates()
+        self.assertEqual(len(groups), 1)
+        self.assertEqual(len(groups[0][1]), 2)
+
+    def test_tag_counts(self) -> None:
+        self.assertEqual(self.catalog.tags(), [("uno", 2), ("dos", 1)])
+
+    def test_find_prefers_exact_title(self) -> None:
+        self.assertEqual(self.catalog.find("beta")[0].title, "Beta")
+        self.assertEqual(self.catalog.find("no existe"), [])
 
 
 if __name__ == "__main__":

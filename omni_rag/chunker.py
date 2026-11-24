@@ -3,14 +3,19 @@
 from __future__ import annotations
 
 import os
+import posixpath
 import re
 from dataclasses import dataclass, field, asdict
 from typing import Any
+from urllib.parse import unquote
 
 from .tokenize import inline_tags
 
 FRONTMATTER_RE = re.compile(r"\A---[ \t]*\r?\n(.*?)\r?\n---[ \t]*\r?\n?", re.S)
 HEADING_RE = re.compile(r"^(#{1,6})[ \t]+(.+?)[ \t]*#*[ \t]*$", re.M)
+WIKILINK_RE = re.compile(r"(!?)\[\[([^\]|#]*)(?:#([^\]|]*))?(?:\|([^\]]*))?\]\]")
+MDLINK_RE = re.compile(r"(?<!!)\[([^\]]*)\]\(([^)\s]+)(?:\s+\"[^\"]*\")?\)")
+SCHEME_RE = re.compile(r"^[a-zA-Z][a-zA-Z0-9+.-]*:")
 
 MAX_CHARS = 900
 MIN_CHARS = 140
@@ -165,10 +170,110 @@ def _split_long(text: str, start_line: int, max_chars: int, overlap: int) -> lis
     return pieces
 
 
-def chunk_note(source: str, path: str, text: str) -> list[Chunk]:
-    """Trocea una nota en fragmentos con encabezado, línea y etiquetas."""
+@dataclass
+class Note:
+    """Nota completa: metadatos, enlaces y fragmentos buscables."""
+
+    source: str
+    path: str
+    title: str
+    tags: list[str]
+    links: list[dict[str, Any]]
+    chunks: list[Chunk]
+    chars: int
+    words: int
+
+    def to_meta(self) -> dict[str, Any]:
+        return {
+            "title": self.title,
+            "tags": list(self.tags),
+            "links": list(self.links),
+            "chars": self.chars,
+            "words": self.words,
+        }
+
+
+def normalize_target(raw: str) -> str:
+    """Normaliza el destino de un enlace para compararlo con rutas y títulos."""
+    value = raw.strip().replace("\\", "/")
+    if value.lower().endswith(".md"):
+        value = value[:-3]
+    return value.strip()
+
+
+def _local_target(raw: str, note_path: str) -> str | None:
+    """Resuelve un enlace Markdown relativo; None si es externo o ancla."""
+    if SCHEME_RE.match(raw):
+        return None
+    target = unquote(raw.split("#", 1)[0].strip())
+    if not target:
+        return None
+    if target.startswith("/"):
+        joined = target.lstrip("/")
+    else:
+        joined = posixpath.join(posixpath.dirname(note_path), target)
+    joined = posixpath.normpath(joined)
+    if joined.startswith(".."):
+        return None
+    return normalize_target(joined)
+
+
+def extract_links(body: str, start_line: int, note_path: str) -> list[dict[str, Any]]:
+    """Extrae wikilinks y enlaces Markdown locales, con su línea."""
+    links: list[dict[str, Any]] = []
+    in_fence = False
+
+    for offset, line in enumerate(body.splitlines()):
+        stripped = line.lstrip()
+        if stripped.startswith("```") or stripped.startswith("~~~"):
+            in_fence = not in_fence
+            continue
+        if in_fence:
+            continue
+
+        number = start_line + offset
+        for match in WIKILINK_RE.finditer(line):
+            embed, target, heading, alias = match.groups()
+            target = normalize_target(target)
+            if not target:
+                continue
+            links.append(
+                {
+                    "kind": "wiki",
+                    "target": target,
+                    "heading": (heading or "").strip() or None,
+                    "alias": (alias or "").strip() or None,
+                    "embed": bool(embed),
+                    "line": number,
+                    "raw": match.group(0),
+                }
+            )
+
+        for match in MDLINK_RE.finditer(line):
+            label, raw_target = match.groups()
+            target = _local_target(raw_target, note_path)
+            if not target:
+                continue
+            links.append(
+                {
+                    "kind": "md",
+                    "target": target,
+                    "heading": None,
+                    "alias": label.strip() or None,
+                    "embed": False,
+                    "line": number,
+                    "raw": match.group(0),
+                }
+            )
+    return links
+
+
+def parse_note(source: str, path: str, text: str) -> Note:
+    """Analiza una nota completa: metadatos, enlaces y fragmentos."""
     meta, body, consumed = parse_frontmatter(text)
-    note = _scalar(str(meta.get("title") or os.path.splitext(os.path.basename(path))[0]))
+    note_title = _scalar(
+        str(meta.get("title") or os.path.splitext(os.path.basename(path))[0])
+    )
     tags = _as_list(meta.get("tags"))
     for tag in inline_tags(body):
         if tag not in tags:
@@ -180,7 +285,7 @@ def chunk_note(source: str, path: str, text: str) -> list[Chunk]:
     chunks: list[Chunk] = []
     buffer: list[str] = []
     buffer_line = body_line
-    heading = note
+    heading = note_title
 
     def flush() -> None:
         nonlocal buffer
@@ -197,7 +302,11 @@ def chunk_note(source: str, path: str, text: str) -> list[Chunk]:
             piece = piece.strip()
             if not piece:
                 continue
-            if len(piece) < MIN_CHARS and len(pieces) > 1 and piece_index == len(pieces) - 1:
+            if (
+                len(piece) < MIN_CHARS
+                and len(pieces) > 1
+                and piece_index == len(pieces) - 1
+            ):
                 # Cola demasiado corta: se descarta en lugar de indexar ruido.
                 continue
             chunks.append(
@@ -207,7 +316,7 @@ def chunk_note(source: str, path: str, text: str) -> list[Chunk]:
                     line=line,
                     heading=heading,
                     text=piece,
-                    note=note,
+                    note=note_title,
                     tags=list(tags),
                 )
             )
@@ -231,7 +340,21 @@ def chunk_note(source: str, path: str, text: str) -> list[Chunk]:
             buffer.append(line)
 
     flush()
-    return chunks
+    return Note(
+        source=source,
+        path=path,
+        title=note_title,
+        tags=tags,
+        links=extract_links(body, body_line, path),
+        chunks=chunks,
+        chars=len(text),
+        words=len(body.split()),
+    )
+
+
+def chunk_note(source: str, path: str, text: str) -> list[Chunk]:
+    """Trocea una nota en fragmentos con encabezado, línea y etiquetas."""
+    return parse_note(source, path, text).chunks
 
 
 def heading_path(chunk: Chunk) -> str:

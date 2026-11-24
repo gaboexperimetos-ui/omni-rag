@@ -27,6 +27,10 @@ DEFAULT_EXCLUDES = (
     "target",
     "zig-cache",
     "zig-out",
+    # Plantillas de Obsidian: no son contenido, son moldes.
+    "_plantillas",
+    "_templates",
+    "templates",
 )
 
 TEXT_EXTENSIONS = (".md", ".markdown", ".mdx", ".txt")

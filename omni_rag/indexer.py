@@ -9,10 +9,10 @@ import time
 from pathlib import Path
 from typing import Callable
 
-from .chunker import Chunk, chunk_note
+from .chunker import Chunk, parse_note
 from .config import DEFAULT_EXCLUDES, Config, Source, expand
 
-INDEX_VERSION = 1
+INDEX_VERSION = 2
 
 
 def file_key(source: str, path: str) -> str:
@@ -21,11 +21,12 @@ def file_key(source: str, path: str) -> str:
 
 def _is_excluded(relative: Path, source: Source) -> bool:
     patterns = list(DEFAULT_EXCLUDES) + list(source.exclude)
+    folded = {pattern.casefold() for pattern in patterns}
     parts = relative.parts
     for part in parts:
         if part.startswith("."):
             return True
-        if part in DEFAULT_EXCLUDES or part in source.exclude:
+        if part.casefold() in folded:
             return True
     text = relative.as_posix()
     return any(fnmatch.fnmatch(text, pattern) for pattern in patterns if "*" in pattern)
@@ -146,7 +147,8 @@ def build(
                 errors.append(f"{abs_path}: {exc}")
                 continue
 
-            chunks = chunk_note(source.name, relative, text)
+            note = parse_note(source.name, relative, text)
+            chunks = note.chunks
             if not chunks:
                 skipped += 1
                 continue
@@ -157,6 +159,7 @@ def build(
                 "type": source.type,
                 "mtime_ns": stat.st_mtime_ns,
                 "size": stat.st_size,
+                "meta": note.to_meta(),
                 "chunks": [chunk.to_dict() for chunk in chunks],
             }
             parsed += 1

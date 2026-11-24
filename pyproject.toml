@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "omni-rag"
-version = "0.1.0"
+version = "0.2.0"
 description = "RAG léxico BM25 multi-fuente sobre notas Markdown/Obsidian"
 readme = "README.md"
 requires-python = ">=3.10"
